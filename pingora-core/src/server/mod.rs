@@ -104,12 +104,9 @@ impl Server {
                 // TODO: still need to select! on signals in case a fast shutdown is needed
                 // aka: move below to another task and only kick it off here
                 info!("SIGQUIT received, sending socks and gracefully exiting");
-                if let Some(fds) = &self.listen_fds {
-                    let fds = fds.lock().await;
-                    info!("Trying to send socks");
+                if let Some(result) = self.send_fds().await {
                     // XXX: this is blocking IO
-                    match fds.send_to_sock(
-                        self.configuration.as_ref().upgrade_sock.as_str())
+                    match result
                     {
                         Ok(_) => {info!("listener sockets sent");},
                         Err(e) => {
@@ -158,7 +155,11 @@ impl Server {
         service_runtime
     }
 
-    fn load_fds(&mut self, upgrade: bool) -> Result<(), nix::Error> {
+    /// Load all listening sockets from older server.
+    ///
+    /// When trying to zero downtime upgrade from an older version of the server which is already
+    /// running, this function will try to get all its listening sockets in order to take them over.
+    pub fn load_fds(&mut self, upgrade: bool) -> Result<(), nix::Error> {
         let mut fds = Fds::new();
         if upgrade {
             debug!("Trying to receive socks");
@@ -166,6 +167,19 @@ impl Server {
         }
         self.listen_fds = Some(Arc::new(Mutex::new(fds)));
         Ok(())
+    }
+
+    /// Send all listening sockets to new server.
+    ///
+    /// When trying to zero downtime upgrade as a new server from older which is already
+    /// running, this function will try to send all its listening sockets to the new one.
+    pub async fn send_fds(&self) -> Option<Result<usize, nix::Error>> {
+        if let Some(fds) = &self.listen_fds {
+            let fds = fds.lock().await;
+            info!("Trying to send socks");
+            return Some(fds.send_to_sock(self.configuration.as_ref().upgrade_sock.as_str()));
+        }
+        None
     }
 
     /// Create a new [`Server`].
