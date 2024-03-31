@@ -255,6 +255,26 @@ impl Server {
             }
         }
     }
+    /// Run all services of server
+    ///
+    /// This function will run all services of server.
+    pub fn run_services(&mut self) -> Vec<Runtime> {
+        let conf = self.configuration.as_ref();
+        let mut runtimes: Vec<Runtime> = Vec::new();
+
+        while let Some(service) = self.services.pop() {
+            let threads = service.threads().unwrap_or(conf.threads);
+            let runtime = Server::run_service(
+                service,
+                self.listen_fds.clone(),
+                self.shutdown_recv.clone(),
+                threads,
+                conf.work_stealing,
+            );
+            runtimes.push(runtime);
+        }
+        runtimes
+    }
 
     /// Start the server
     ///
@@ -282,19 +302,7 @@ impl Server {
             None => None,
         };
 
-        let mut runtimes: Vec<Runtime> = Vec::new();
-
-        while let Some(service) = self.services.pop() {
-            let threads = service.threads().unwrap_or(conf.threads);
-            let runtime = Server::run_service(
-                service,
-                self.listen_fds.clone(),
-                self.shutdown_recv.clone(),
-                threads,
-                conf.work_stealing,
-            );
-            runtimes.push(runtime);
-        }
+        let runtimes = self.run_services();
 
         // blocked on main loop so that it runs forever
         // Only work steal runtime can use block_on()
