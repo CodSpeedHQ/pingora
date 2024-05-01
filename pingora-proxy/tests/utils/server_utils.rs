@@ -239,7 +239,7 @@ impl ProxyHttp for ExampleProxyHttp {
                 "/tmp/nginx-test.sock",
                 false,
                 "".to_string(),
-            )));
+            )?));
         }
         let port = req
             .headers
