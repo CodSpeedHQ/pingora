@@ -854,29 +854,31 @@ impl HttpSession {
     }
 
     async fn response_duplex(&mut self, task: HttpTask) -> Result<bool> {
-        match task {
+        let end_stream = match task {
             HttpTask::Header(header, end_stream) => {
                 self.write_response_header(header)
                     .await
                     .map_err(|e| e.into_down())?;
-                Ok(end_stream)
+                end_stream
             }
             HttpTask::Body(data, end_stream) => match data {
                 Some(d) => {
                     if !d.is_empty() {
                         self.write_body(&d).await.map_err(|e| e.into_down())?;
                     }
-                    Ok(end_stream)
+                    end_stream
                 }
-                None => Ok(end_stream),
+                None => end_stream,
             },
-            HttpTask::Trailer(_) => Ok(true), // h1 trailer is not supported yet
-            HttpTask::Done => {
-                self.finish_body().await.map_err(|e| e.into_down())?;
-                Ok(true)
-            }
-            HttpTask::Failed(e) => Err(e),
+            HttpTask::Trailer(_) => true, // h1 trailer is not supported yet
+            HttpTask::Done => true,
+            HttpTask::Failed(e) => return Err(e),
+        };
+        if end_stream {
+            // no-op if body wasn't initialized or is finished already
+            self.finish_body().await.map_err(|e| e.into_down())?;
         }
+        Ok(end_stream)
     }
 
     // TODO: use vectored write to avoid copying
@@ -905,12 +907,7 @@ impl HttpSession {
                     None => end_stream,
                 },
                 HttpTask::Trailer(_) => true, // h1 trailer is not supported yet
-                HttpTask::Done => {
-                    // flush body first
-                    self.write_body_buf().await.map_err(|e| e.into_down())?;
-                    self.finish_body().await.map_err(|e| e.into_down())?;
-                    return Ok(true);
-                }
+                HttpTask::Done => true,
                 HttpTask::Failed(e) => {
                     // flush the data we have and quit
                     self.write_body_buf().await.map_err(|e| e.into_down())?;
@@ -923,6 +920,10 @@ impl HttpSession {
             }
         }
         self.write_body_buf().await.map_err(|e| e.into_down())?;
+        if end_stream {
+            // no-op if body wasn't initialized or is finished already
+            self.finish_body().await.map_err(|e| e.into_down())?;
+        }
         Ok(end_stream)
     }
 }
@@ -1013,7 +1014,7 @@ fn http_resp_header_to_buf(
     let status = resp.status;
     buf.put_slice(status.as_str().as_bytes());
     buf.put_u8(b' ');
-    let reason = status.canonical_reason();
+    let reason = resp.get_reason_phrase();
     if let Some(reason_buf) = reason {
         buf.put_slice(reason_buf.as_bytes());
     }
@@ -1373,6 +1374,21 @@ mod tests_stream {
         let mock_io = Builder::new().write(wire).build();
         let mut http_stream = HttpSession::new(Box::new(mock_io));
         let mut new_response = ResponseHeader::build(StatusCode::OK, None).unwrap();
+        new_response.append_header("Foo", "Bar").unwrap();
+        http_stream.update_resp_headers = false;
+        http_stream
+            .write_response_header_ref(&new_response)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_custom_reason() {
+        let wire = b"HTTP/1.1 200 Just Fine\r\nFoo: Bar\r\n\r\n";
+        let mock_io = Builder::new().write(wire).build();
+        let mut http_stream = HttpSession::new(Box::new(mock_io));
+        let mut new_response = ResponseHeader::build(StatusCode::OK, None).unwrap();
+        new_response.set_reason_phrase(Some("Just Fine")).unwrap();
         new_response.append_header("Foo", "Bar").unwrap();
         http_stream.update_resp_headers = false;
         http_stream

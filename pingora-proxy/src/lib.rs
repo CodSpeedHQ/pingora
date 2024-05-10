@@ -79,6 +79,7 @@ mod subrequest;
 
 use subrequest::Ctx as SubReqCtx;
 
+pub use proxy_purge::PurgeStatus;
 pub use proxy_trait::ProxyHttp;
 
 pub mod prelude {
@@ -614,7 +615,7 @@ where
         self.process_request(session, ctx).await
     }
 
-    fn http_cleanup(&self) {
+    async fn http_cleanup(&self) {
         // Notify all keepalived requests blocking on read_request() to abort
         self.shutdown.notify_waiters();
 
@@ -634,4 +635,15 @@ pub fn http_proxy_service<SV>(conf: &Arc<ServerConf>, inner: SV) -> Service<Http
         "Pingora HTTP Proxy Service".into(),
         HttpProxy::new(inner, conf.clone()),
     )
+}
+
+/// Create a [Service] from the user implemented [ProxyHttp].
+///
+/// The returned [Service] can be hosted by a [pingora_core::server::Server] directly.
+pub fn http_proxy_service_with_name<SV>(
+    conf: &Arc<ServerConf>,
+    inner: SV,
+    name: &str,
+) -> Service<HttpProxy<SV>> {
+    Service::new(name.to_string(), HttpProxy::new(inner, conf.clone()))
 }
