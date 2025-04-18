@@ -23,6 +23,8 @@ use pingora_error::{Error, ErrorType::*, OrErr, Result};
 use std::io::{self, ErrorKind};
 use std::mem;
 use std::net::SocketAddr;
+#[cfg(target_os = "linux")]
+use std::net::{SocketAddrV4, SocketAddrV6};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::time::Duration;
 use tokio::net::{TcpSocket, TcpStream, UnixStream};
@@ -333,6 +335,42 @@ pub fn get_socket_cookie(fd: RawFd) -> io::Result<u64> {
 #[cfg(not(target_os = "linux"))]
 pub fn get_socket_cookie(_fd: RawFd) -> io::Result<u64> {
     Ok(0) // SO_COOKIE is a Linux concept
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_original_dest_v4(fd: RawFd) -> io::Result<Option<SocketAddr>> {
+    let addr = get_opt_sized::<libc::sockaddr_in>(fd, libc::SOL_IP, libc::SO_ORIGINAL_DST)?;
+    Ok(Some(
+        SocketAddrV4::new(
+            u32::from_be(addr.sin_addr.s_addr).into(),
+            u16::from_be(addr.sin_port),
+        )
+        .into(),
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn get_original_dest_v4(_fd: RawFd) -> io::Result<Option<SocketAddr>> {
+    Ok(None)
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_original_dest_v6(fd: RawFd) -> io::Result<Option<SocketAddr>> {
+    let addr = get_opt_sized::<libc::sockaddr_in6>(fd, libc::SOL_IPV6, libc::IP6T_SO_ORIGINAL_DST)?;
+    Ok(Some(
+        SocketAddrV6::new(
+            addr.sin6_addr.s6_addr.into(),
+            u16::from_be(addr.sin6_port),
+            addr.sin6_flowinfo,
+            addr.sin6_scope_id,
+        )
+        .into(),
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn get_original_dest_v6(_fd: RawFd) -> io::Result<Option<SocketAddr>> {
+    Ok(None)
 }
 
 /// connect() to the given address while optionally binding to the specific source address and port range.
